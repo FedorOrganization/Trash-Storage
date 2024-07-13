@@ -2,9 +2,18 @@ import asyncio
 from aiogram import Bot, Dispatcher, types
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.filters import Command
+import psycopg2
 import time
 
-token = "7014899022:AAEddAEJBNhGZsLNRqBu_JEOk1CtUp_OkTg"
+db_conf = {
+    'user': 'your_db_user',
+    'password': 'your_db_password',
+    'database': 'your_database_name',
+    'host': 'your_db_host',
+    'port': 5432
+}
+TOKEN = "7014899022:AAEddAEJBNhGZsLNRqBu_JEOk1CtUp_OkTg"
+
 
 class Item:
     def __init__(self, name, cost, effect, level):
@@ -12,6 +21,7 @@ class Item:
         self.cost = cost
         self.effect = effect
         self.level = level
+
 
 class Shop:
     def __init__(self):
@@ -41,17 +51,19 @@ class Shop:
             Item("Магический меч", 25600, 5120, 768)
         ]
 
+
 class User:
-    def __init__(self):
-        self.gold = 0  # Золото
-        self.exp = 0  # Опыт
-        self.level = 1  # Уровень
-        self.workers = 2  # Рабочие
-        self.gold_per_sec = 0  # Золото в секунду
-        self.exp_per_sec = 0  # Опыт в секунду
-        self.pickaxes = []  # Список купленных кирок
-        self.swords = []  # Список купленных мечей
-        self.last_update = time.time()
+    def __init__(self, gold=0, exp=0, level=1, workers=2, gold_per_sec=0, exp_per_sec=0, pickaxes=None, swords=None,
+                 last_update=None):
+        self.gold = gold
+        self.exp = exp
+        self.level = level
+        self.workers = workers
+        self.gold_per_sec = gold_per_sec
+        self.exp_per_sec = exp_per_sec
+        self.pickaxes = pickaxes if pickaxes is not None else []
+        self.swords = swords if swords is not None else []
+        self.last_update = last_update if last_update is not None else time.time()
 
     def update_resources(self):
         now = time.time()
@@ -66,37 +78,74 @@ class User:
 
     def level_up(self):
         needed_exp = self.level * 200
-        while self.exp >= needed_exp:
+        if self.exp >= needed_exp:
             self.exp -= needed_exp
             self.level += 1
-            needed_exp = self.level * 200
 
-class GameBot:
+
+class MainBot:
     def __init__(self, token):
         self.bot = Bot(token)
         self.dp = Dispatcher()
         self.shop = Shop()
         self.users = {}
-        self.update_interval = 5  # Интервал обновления в секундах
 
     async def start(self):
         self.dp.message.register(self.start_command, Command(commands=["start"]))
+        self.dp.message.register(self.save_command, Command(commands=["save"]))
         self.dp.callback_query.register(self.button_click, lambda c: True)
         await self.bot.delete_webhook(drop_pending_updates=True)
-
-        asyncio.create_task(self.update_resources_loop())  # Запуск цикла обновления ресурсов
         await self.dp.start_polling(self.bot)
-
-    async def update_resources_loop(self):
-        while True:
-            for user in self.users.values():
-                user.update_resources()
-            await asyncio.sleep(self.update_interval)
 
     def get_user(self, user_id):
         if user_id not in self.users:
             self.users[user_id] = User()
         return self.users[user_id]
+
+    async def init_db(self):
+        self.conn = psycopg2.connect(**db_conf)
+        self.conn.autocommit = True
+        cursor = self.conn.cursor()
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS users (
+                id BIGINT PRIMARY KEY,
+                gold REAL DEFAULT 0,
+                exp REAL DEFAULT 0,
+                level INTEGER DEFAULT 1,
+                gold_per_sec REAL DEFAULT 0,
+                exp_per_sec REAL DEFAULT 0,
+                workers INTEGER DEFAULT 2,
+                pickaxes TEXT,
+                swords TEXT,
+                last_update REAL
+            )
+        ''')
+        cursor.close()
+
+    async def save_command(self, message: types.Message):
+        user_id = message.from_user.id
+        user = self.get_user(user_id)
+        await self.save_user(user_id, user)
+        await message.answer("Ваш прогресс сохранен.")
+
+    async def save_user(self, user_id, user):
+        cursor = self.conn.cursor()
+        cursor.execute('''
+            INSERT INTO users (id, gold, exp, level, gold_per_sec, exp_per_sec, workers, pickaxes, swords, last_update)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (id) DO UPDATE SET
+                gold = EXCLUDED.gold,
+                exp = EXCLUDED.exp,
+                level = EXCLUDED.level,
+                gold_per_sec = EXCLUDED.gold_per_sec,
+                exp_per_sec = EXCLUDED.exp_per_sec,
+                workers = EXCLUDED.workers,
+                pickaxes = EXCLUDED.pickaxes,
+                swords = EXCLUDED.swords,
+                last_update = EXCLUDED.last_update
+        ''', (user_id, user.gold, user.exp, user.level, user.gold_per_sec, user.exp_per_sec, user.workers,
+              ','.join(user.pickaxes), ','.join(user.swords), user.last_update))
+        cursor.close()
 
     async def start_command(self, message: types.Message):
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
@@ -139,7 +188,8 @@ class GameBot:
             user.workers -= 1
             user.gold_per_sec += 10
             await callback_query.message.answer(
-                f"1 рабочий отправлен на добычу золота.\n Осталось рабочих: {user.workers}")
+                f"1 рабочий отправлен на добычу золота.\n Осталось рабочих: {user.workers}"
+            )
 
     async def exp_click(self, callback_query, user):
         if user.workers <= 0:
@@ -233,5 +283,11 @@ class GameBot:
             user.swords.append(sword.name)
             await callback_query.message.answer(f"Вы купили {sword.name}.")
 
-bot = GameBot(token)
-asyncio.run(bot.start())
+
+async def main():
+    bot = MainBot(TOKEN)
+    await bot.init_db()
+    await bot.start()
+
+
+asyncio.run(main())
