@@ -6,41 +6,6 @@ import time
 
 token = "7014899022:AAEddAEJBNhGZsLNRqBu_JEOk1CtUp_OkTg"
 
-class Item:
-    def __init__(self, name, cost, effect, level):
-        self.name = name
-        self.cost = cost
-        self.effect = effect
-        self.level = level
-
-class Shop:
-    def __init__(self):
-        self.worker_cost = 100
-        self.pickaxes = [
-            Item("Деревянная кирка", 50, 5, 1),
-            Item("Бронзовая кирка", 100, 10, 3),
-            Item("Железная кирка", 200, 20, 6),
-            Item("Серебряная кирка", 400, 40, 12),
-            Item("Золотая кирка", 800, 80, 24),
-            Item("Платиновая кирка", 1600, 160, 48),
-            Item("Алмазная кирка", 3200, 320, 96),
-            Item("Титановая кирка", 6400, 640, 192),
-            Item("Мифриловая кирка", 12800, 1280, 384),
-            Item("Магическая кирка", 25600, 2560, 768)
-        ]
-        self.swords = [
-            Item("Деревянный меч", 50, 10, 1),
-            Item("Бронзовый меч", 100, 20, 3),
-            Item("Железный меч", 200, 40, 6),
-            Item("Серебряный меч", 400, 80, 12),
-            Item("Золотой меч", 800, 160, 24),
-            Item("Платиновый меч", 1600, 320, 48),
-            Item("Алмазный меч", 3200, 640, 96),
-            Item("Титановый меч", 6400, 1280, 192),
-            Item("Мифриловый меч", 12800, 2560, 384),
-            Item("Магический меч", 25600, 5120, 768)
-        ]
-
 class User:
     def __init__(self):
         self.gold = 0  # Золото
@@ -49,20 +14,17 @@ class User:
         self.workers = 2  # Рабочие
         self.gold_per_sec = 0  # Золото в секунду
         self.exp_per_sec = 0  # Опыт в секунду
-        self.pickaxes = []  # Список купленных кирок
-        self.swords = []  # Список купленных мечей
-        self.last_update = time.time()
+        self.last_update = time.time()  # Время последнего обновления
 
     def update_resources(self):
         now = time.time()
         sec = now - self.last_update
 
-        # Добавляем золото и опыт за прошедшее время
         self.gold += self.gold_per_sec * sec
         self.exp += self.exp_per_sec * sec
 
-        self.last_update = now  # Обновляем время последнего обновления
-        self.level_up()  # Проверяем возможность повышения уровня
+        self.last_update = now
+        self.level_up()
 
     def level_up(self):
         needed_exp = self.level * 200
@@ -75,16 +37,17 @@ class GameBot:
     def __init__(self, token):
         self.bot = Bot(token)
         self.dp = Dispatcher()
-        self.shop = Shop()
-        self.users = {}
-        self.update_interval = 5  # Интервал обновления в секундах
+        self.users = {}  # Словарь для хранения пользователей
+        self.update_interval = 5  # Интервал обновления ресурсов (в секундах)
+        self.gold_effect = 5  # Начальный бонус золота в секунду при улучшении кирки
+        self.exp_effect = 10  # Начальный бонус опыта в секунду при улучшении меча
+        self.worker_cost = 100  # Стоимость рабочего
 
     async def start(self):
         self.dp.message.register(self.start_command, Command(commands=["start"]))
         self.dp.callback_query.register(self.button_click, lambda c: True)
         await self.bot.delete_webhook(drop_pending_updates=True)
-
-        asyncio.create_task(self.update_resources_loop())  # Запуск цикла обновления ресурсов
+        asyncio.create_task(self.update_resources_loop())
         await self.dp.start_polling(self.bot)
 
     async def update_resources_loop(self):
@@ -105,7 +68,7 @@ class GameBot:
             [InlineKeyboardButton(text="Магазин 🛒", callback_data="shop")],
             [InlineKeyboardButton(text="Профиль 👤", callback_data="profile")]
         ])
-        await message.answer("Выберите кнопку", reply_markup=keyboard)
+        await message.answer("Основное меню", reply_markup=keyboard)
 
     async def button_click(self, callback_query: types.CallbackQuery):
         user_id = callback_query.from_user.id
@@ -123,14 +86,10 @@ class GameBot:
             await self.profile(callback_query, user)
         elif action == "buy_worker":
             await self.buy_worker(callback_query, user)
-        elif action == "shop_pickaxes":
-            await self.shop_pickaxes_menu(callback_query, user)
-        elif action == "shop_swords":
-            await self.shop_swords_menu(callback_query, user)
-        elif action.startswith("buy_pickaxe"):
-            await self.buy_pickaxe(callback_query, user, action)
-        elif action.startswith("buy_sword"):
-            await self.buy_sword(callback_query, user, action)
+        elif action == "upgrade_pickaxe":
+            await self.upgrade_pickaxe(callback_query, user)
+        elif action == "upgrade_sword":
+            await self.upgrade_sword(callback_query, user)
 
     async def gold_click(self, callback_query, user):
         if user.workers <= 0:
@@ -139,7 +98,9 @@ class GameBot:
             user.workers -= 1
             user.gold_per_sec += 10
             await callback_query.message.answer(
-                f"1 рабочий отправлен на добычу золота.\n Осталось рабочих: {user.workers}")
+                f"1 рабочий отправлен на добычу золота.\nОсталось рабочих: {user.workers}"
+            )
+        await callback_query.answer()  # Обрабатываем запрос
 
     async def exp_click(self, callback_query, user):
         if user.workers <= 0:
@@ -148,16 +109,18 @@ class GameBot:
             user.workers -= 1
             user.exp_per_sec += 20
             await callback_query.message.answer(
-                f"1 рабочий отправлен на добычу опыта.\n Осталось рабочих: {user.workers}"
+                f"1 рабочий отправлен на добычу опыта.\nОсталось рабочих: {user.workers}"
             )
+        await callback_query.answer()  # Обрабатываем запрос
 
     async def shop_menu(self, callback_query, user):
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="Купить рабочего 👷", callback_data="buy_worker")],
-            [InlineKeyboardButton(text="Купить кирку ⛏️", callback_data="shop_pickaxes")],
-            [InlineKeyboardButton(text="Купить меч ⚔️", callback_data="shop_swords")]
+            [InlineKeyboardButton(text="Улучшить кирку ⛏️", callback_data="upgrade_pickaxe")],
+            [InlineKeyboardButton(text="Улучшить меч ⚔️", callback_data="upgrade_sword")]
         ])
         await callback_query.message.answer("Добро пожаловать в магазин!", reply_markup=keyboard)
+        await callback_query.answer()  # Обрабатываем запрос
 
     async def profile(self, callback_query, user):
         await callback_query.message.answer(
@@ -169,69 +132,50 @@ class GameBot:
             f"Опыт/с: {user.exp_per_sec}\n"
             f"Рабочие: {user.workers}"
         )
+        await callback_query.answer()  # Обрабатываем запрос
 
     async def buy_worker(self, callback_query, user):
-        if user.gold >= self.shop.worker_cost:
-            user.gold -= self.shop.worker_cost
+        if user.gold >= self.worker_cost:
+            user.gold -= self.worker_cost
             user.workers += 1
-            await callback_query.message.answer(f"Вы купили рабочего. Осталось рабочих: {user.workers}")
+            self.worker_cost *= 2  # Увеличиваем стоимость следующего рабочего
+
+            # Создаем клавиатуру и обновляем сообщение
+            keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="Купить рабочего 👷", callback_data="buy_worker")],
+                [InlineKeyboardButton(text="Улучшить кирку ⛏️", callback_data="upgrade_pickaxe")],
+                [InlineKeyboardButton(text="Улучшить меч ⚔️", callback_data="upgrade_sword")]
+            ])
+            await callback_query.message.edit_text(
+                f"Вы купили рабочего. Осталось рабочих: {user.workers}",
+                reply_markup=keyboard
+            )
         else:
-            await callback_query.message.answer("У вас недостаточно золота")
+            await callback_query.message.answer(f"Вам не хватает {int(self.worker_cost - user.gold)} золота.")
 
-    async def shop_pickaxes_menu(self, callback_query, user):
-        keyboard = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text=f"{pickaxe.name} - {pickaxe.cost} золота",
-                                  callback_data=f"buy_pickaxe_{pickaxe.name}")]
-            for pickaxe in self.shop.pickaxes
-        ])
-        await callback_query.message.answer("Выберите кирку для покупки", reply_markup=keyboard)
+        await callback_query.answer()  # Обрабатываем запрос
 
-    async def buy_pickaxe(self, callback_query, user, action):
-        pickaxe_name = action[len("buy_pickaxe_"):]
-        pickaxe = next((p for p in self.shop.pickaxes if p.name == pickaxe_name), None)
-
-        if pickaxe is None:
-            await callback_query.message.answer("Кирка не найдена.")
-            return
-
-        if user.gold < pickaxe.cost:
-            await callback_query.message.answer(f"Вам не хватает {pickaxe.cost - user.gold} золота.")
-        elif pickaxe.name in user.pickaxes:
-            await callback_query.message.answer(f"У вас уже есть {pickaxe.name}.")
-        elif user.level < pickaxe.level:
-            await callback_query.message.answer(f"{pickaxe.name} доступна с уровня {pickaxe.level}.")
+    async def upgrade_pickaxe(self, callback_query, user):
+        cost = self.gold_effect * 10
+        if user.gold < cost:
+            await callback_query.message.answer(f"Вам не хватает {int(cost - user.gold)} золота.")
         else:
-            user.gold -= pickaxe.cost
-            user.gold_per_sec += pickaxe.effect
-            user.pickaxes.append(pickaxe.name)
-            await callback_query.message.answer(f"Вы купили {pickaxe.name}.")
+            user.gold -= cost
+            user.gold_per_sec += self.gold_effect
+            self.gold_effect *= 2
+            await callback_query.message.answer(f"Вы улучшили свою кирку. Теперь золото в секунду: {user.gold_per_sec}")
+        await callback_query.answer()  # Обрабатываем запрос
 
-    async def shop_swords_menu(self, callback_query, user):
-        keyboard = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text=f"{sword.name} - {sword.cost} золота", callback_data=f"buy_sword_{sword.name}")]
-            for sword in self.shop.swords
-        ])
-        await callback_query.message.answer("Выберите меч для покупки", reply_markup=keyboard)
-
-    async def buy_sword(self, callback_query, user, action):
-        sword_name = action[len("buy_sword_"):]
-        sword = next((s for s in self.shop.swords if s.name == sword_name), None)
-
-        if sword is None:
-            await callback_query.message.answer("Меч не найден.")
-            return
-
-        if user.gold < sword.cost:
-            await callback_query.message.answer(f"Вам не хватает {sword.cost - user.gold} золота.")
-        elif sword.name in user.swords:
-            await callback_query.message.answer(f"У вас уже есть {sword.name}.")
-        elif user.level < sword.level:
-            await callback_query.message.answer(f"{sword.name} доступен с уровня {sword.level}.")
+    async def upgrade_sword(self, callback_query, user):
+        cost = self.exp_effect * 10
+        if user.gold < cost:
+            await callback_query.message.answer(f"Вам не хватает {int(cost - user.gold)} золота.")
         else:
-            user.gold -= sword.cost
-            user.exp_per_sec += sword.effect
-            user.swords.append(sword.name)
-            await callback_query.message.answer(f"Вы купили {sword.name}.")
+            user.gold -= cost
+            user.exp_per_sec += self.exp_effect
+            self.exp_effect *= 2
+            await callback_query.message.answer(f"Вы улучшили свой меч. Теперь опыт в секунду: {user.exp_per_sec}")
+        await callback_query.answer()  # Обрабатываем запрос
 
 bot = GameBot(token)
 asyncio.run(bot.start())
