@@ -1,3 +1,8 @@
+#  Таски:
+# 1. Подключить БД.
+# 2. Добавить конец, ограничение.
+# 3. Постараться не Kill myself, пока Павел отдыхает.
+
 import asyncio
 from aiogram import Bot, Dispatcher, types
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
